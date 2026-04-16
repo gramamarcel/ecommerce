@@ -20,7 +20,6 @@ bootstrap/cache/*
 /infrastructure/backup/*
 
 # Terraform
-terraform.tfvars
 *.tfstate
 *.tfstate.*
 .terraform/
