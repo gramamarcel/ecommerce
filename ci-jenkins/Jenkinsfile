@@ -22,7 +22,7 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'git@github.com:gramamarcel/ecommerce.git'
+                git branch: 'cicd', url: 'git@github.com:gramamarcel/ecommerce.git'
             }
         }
 
