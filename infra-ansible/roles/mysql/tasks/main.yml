@@ -1,0 +1,21 @@
+---
+# MySQL with database restore
+
+- name: Run MySQL container
+  docker_container:
+    name: mysql
+    image: mysql:8
+    env:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: ecommerce
+    ports:
+      - "3306:3306"
+
+- name: Copy database backup
+  copy:
+    src: ../../backup/backup.sql
+    dest: /tmp/backup.sql
+
+- name: Restore database
+  shell: |
+    docker exec -i mysql mysql -uroot -proot ecommerce < /tmp/backup.sql

@@ -1,0 +1,13 @@
+---
+# Load balancer configuration
+
+- name: Install Nginx
+  apt:
+    name: nginx
+    state: present
+
+- name: Start Nginx
+  systemd:
+    name: nginx
+    state: started
+    enabled: yes

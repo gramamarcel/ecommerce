@@ -1,0 +1,213 @@
+pipeline {
+    agent any
+
+    environment {
+        APP1 = 'vagrant@192.168.56.10'
+        APP2 = 'vagrant@192.168.56.11'
+        NEXUS_URL = 'http://192.168.56.60:8081/repository/laravel-artifacts'
+        CURRENT_DIR = "/var/www/ecommerce/current"
+        SONAR_TOKEN = credentials('sonar-token')
+    }
+
+    stages {
+
+        stage('Prepare') {
+            steps {
+                script {
+                    env.TIMESTAMP = sh(script: "date +%Y%m%d-%H%M", returnStdout: true).trim()
+                    env.RELEASE_DIR = "/var/www/ecommerce/releases/${env.TIMESTAMP}"
+                }
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: 'git@github.com:gramamarcel/ecommerce.git'
+            }
+        }
+
+        stage('Test SSH Connection') {
+            steps {
+                sshagent(['app-ssh']) {
+                    sh "ssh -o StrictHostKeyChecking=no $APP1 'hostname && whoami'"
+                    sh "ssh -o StrictHostKeyChecking=no $APP2 'hostname && whoami'"
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+echo "BUILD DOCKER IMAGE"
+docker build -t laravel-build .
+'''
+            }
+        }
+
+        stage('Build Artifacts in Container') {
+            steps {
+                sh '''
+docker rm -f laravel-build-container || true
+
+docker run --name laravel-build-container laravel-build bash -c '
+
+set -e
+
+echo "Installing composer dependencies"
+composer install --no-interaction --optimize-autoloader --no-scripts
+
+echo "Generating app key"
+php artisan key:generate || true
+
+echo "Creating backend artifact"
+
+tar -czvf /tmp/laravel-backend.tar.gz \
+    ./app \
+    ./bootstrap \
+    ./config \
+    ./database \
+    ./routes \
+    ./resources \
+    ./public \
+    ./docker \
+    ./artisan \
+    ./composer.json \
+    ./composer.lock \
+    ./package.json \
+    ./package-lock.json \
+    ./vite.config.js \
+    ./vendor
+
+echo "Creating frontend artifact"
+
+tar -czvf /tmp/laravel-frontend.tar.gz -C public build
+
+ls -lh /tmp
+'
+'''
+            }
+        }
+
+        stage('Copy Artifacts from Container') {
+            steps {
+                sh '''
+docker cp laravel-build-container:/tmp/laravel-backend.tar.gz $WORKSPACE/
+docker cp laravel-build-container:/tmp/laravel-frontend.tar.gz $WORKSPACE/
+
+docker rm laravel-build-container
+
+ls -lh
+'''
+            }
+        }
+
+        stage('Upload to Nexus') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus',
+                    usernameVariable: 'NEXUS_USER',
+                    passwordVariable: 'NEXUS_PASS'
+                )]) {
+
+                    sh '''
+curl -f -u $NEXUS_USER:$NEXUS_PASS --upload-file laravel-backend.tar.gz $NEXUS_URL/laravel-backend-${BUILD_NUMBER}.tar.gz
+
+curl -f -u $NEXUS_USER:$NEXUS_PASS --upload-file laravel-frontend.tar.gz $NEXUS_URL/laravel-frontend-${BUILD_NUMBER}.tar.gz
+'''
+                }
+            }
+        }
+
+        stage('Deploy to Servers') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus',
+                    usernameVariable: 'NEXUS_USER',
+                    passwordVariable: 'NEXUS_PASS'
+                )]) {
+
+                    script {
+
+                        def servers = [env.APP1, env.APP2]
+
+                        for (server in servers) {
+
+                            sshagent(['app-ssh']) {
+
+                                sh """
+ssh -o StrictHostKeyChecking=no ${server} '
+
+echo "Deploying to server"
+
+sudo mkdir -p ${RELEASE_DIR}
+sudo chown \$(whoami):\$(whoami) ${RELEASE_DIR}
+
+cd ${RELEASE_DIR}
+
+echo "Downloading artifacts"
+
+curl -f -u "${NEXUS_USER}:${NEXUS_PASS}" -O "${NEXUS_URL}/laravel-backend-${BUILD_NUMBER}.tar.gz"
+curl -f -u "${NEXUS_USER}:${NEXUS_PASS}" -O "${NEXUS_URL}/laravel-frontend-${BUILD_NUMBER}.tar.gz"
+
+echo "Extracting artifacts"
+
+tar -xzf laravel-backend-${BUILD_NUMBER}.tar.gz
+tar -xzf laravel-frontend-${BUILD_NUMBER}.tar.gz
+
+echo "Updating symlink"
+
+sudo ln -sfn ${RELEASE_DIR} ${CURRENT_DIR}
+
+echo "Creating docker-compose.yml"
+
+cat > ${CURRENT_DIR}/docker-compose.yml <<EOF
+version: '3.9'
+
+services:
+
+  app:
+    build:
+      context: ${CURRENT_DIR}
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ${CURRENT_DIR}:/app
+    expose:
+      - "9000"
+
+  web:
+    image: nginx:alpine
+    ports:
+      - "8000:80"
+    volumes:
+      - ${CURRENT_DIR}:/var/www/ecommerce/current
+      - ${CURRENT_DIR}/docker/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+EOF
+
+echo "Starting containers"
+
+docker compose -f ${CURRENT_DIR}/docker-compose.yml down || true
+docker compose -f ${CURRENT_DIR}/docker-compose.yml up -d --build
+
+docker ps
+'
+"""
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo "Deploy successful!"
+        }
+        failure {
+            echo "Deploy failed!"
+        }
+    }
+}
