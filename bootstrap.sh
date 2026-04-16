@@ -6,19 +6,18 @@ echo "======================================"
 echo " DEVOPS PLATFORM BOOTSTRAP START"
 echo "======================================"
 
-# ----------------------------
-# 1. TERRAFORM
-# ----------------------------
-echo "[1/3] Starting Terraform..."
-
 cd infra-terraform
 
-terraform init
-terraform apply -auto-approve
+echo "[1/3] Terraform Init..."
+terraform init -reconfigure
 
-cd ..
+echo "[2/3] Terraform Plan..."
+terraform plan -var-file="terraform.tfvars"
 
-echo "[OK] Terraform completed."
+echo "[3/3] Terraform Apply..."
+terraform apply -auto-approve -var-file="terraform.tfvars"
+
+echo "DONE"
 
 # ----------------------------
 # 2. WAIT FOR VMs

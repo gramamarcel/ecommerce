@@ -1,19 +1,23 @@
 #!/bin/bash
+set -e
 
-# Wait for database to be ready
-echo "Waiting for database..."
-while ! mysqladmin ping -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" --silent; do
-    echo "Database not ready, waiting..."
-    sleep 2
-done
+# Crează foldere necesare Laravel
+mkdir -p /app/storage/framework/{cache,sessions,views}
+mkdir -p /app/bootstrap/cache
 
-echo "Database is ready!"
+# Setează permisiuni
+chown -R www-data:www-data /app/storage /app/bootstrap/cache
+chmod -R 775 /app/storage /app/bootstrap/cache
 
-# Run migrations
-php artisan migrate --force
+# Creează fișier .env dacă lipsește
+if [ ! -f /app/.env ]; then
+    cp /app/.env.example /app/.env
+fi
 
-# Run seeders if needed
-# php artisan db:seed --force
+# Dacă lipsesc dependențele, instalează-le
+if [ ! -d /app/vendor ]; then
+    composer install --no-interaction --optimize-autoloader --no-scripts
+fi
 
-# Start the application
+# Rulează comanda transmisă (php-fpm)
 exec "$@"
